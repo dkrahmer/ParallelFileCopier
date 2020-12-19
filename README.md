@@ -3,6 +3,10 @@
 C# .NET library and CLI application to perform file or recursive directory copies in parallel.
 Supports multiple files at once, multiple copy streams per files, or both together.
 
+Parallel file copying can greatly improve file transfer speeds over high latency, high bandwidth network connections for large files or many small files.
+
+Parallel file copying on a local drive may perform slower than a standard single-threaded file copy due to the extra overhead of multiple streams, threads and hardware I/O.
+
 Custom behavior is configurable via properties or CLI arguments.
 
 ```
