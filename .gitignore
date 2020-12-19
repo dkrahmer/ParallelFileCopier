@@ -5,3 +5,4 @@ App.Release.config
 App.Debug.config
 /packages
 *.suo
+*.user

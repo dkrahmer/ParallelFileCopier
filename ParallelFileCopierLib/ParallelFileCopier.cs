@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -9,12 +10,16 @@ namespace KrahmerSoft.ParallelFileCopierLib
 {
 	public class ParallelFileCopier
 	{
+		private SemaphoreSlim _copyOperationsSemaphore = new SemaphoreSlim(1);
 		private SemaphoreSlim _concurrentFilesSemaphore;
 		private SemaphoreSlim _maxFileQueueLengthSemaphore;
 		private SemaphoreSlim _maxTotalThreadsSemaphore;
 		private SemaphoreSlim _maxTotalThreadsSafetySemaphore = new SemaphoreSlim(1);
 		private ParallelFileCopierOptions _options;
 		private List<Exception> _exceptions;
+		private long _copiedFileCount;
+		private long _copiedByteCount;
+		private Stopwatch _copyStopwatch;
 
 		public event EventHandler<FileCopyData> StartFileCopy;
 		public event EventHandler<FileCopyData> EndFileCopy;
@@ -47,85 +52,95 @@ namespace KrahmerSoft.ParallelFileCopierLib
 
 		public async Task CopyFilesAsync(string sourcePath, string destinationPath)
 		{
-			_exceptions = new List<Exception>();
+			await StartCopyOperationAsync();
 
-			await CopyFilesInternalAsync(sourcePath, destinationPath, 0);
+			try
+			{
+				await CopyFilesInternalAsync(sourcePath, destinationPath, 0);
 
-			if (_exceptions.Count == 1)
-				throw _exceptions[0];
+				if (_exceptions.Count == 1)
+					throw _exceptions[0];
 
-			if (_exceptions.Count > 1)
-				throw new AggregateException(_exceptions);
-
-			return;
+				if (_exceptions.Count > 1)
+					throw new AggregateException(_exceptions);
+			}
+			finally
+			{
+				EndCopyOperation();
+			}
 		}
 
 		protected async Task CopyFilesInternalAsync(string sourcePath, string destinationPath, int level)
 		{
+			PathType sourceType = GetPathType(sourcePath);
+			PathType destinationType = GetPathType(destinationPath);
+			string sourceFileMask = "*";
+
+			if (destinationType == PathType.Directory && sourceType != PathType.Unknown)
+			{
+				destinationPath = Path.Combine(destinationPath, Path.GetFileName(sourcePath));
+				destinationType = sourceType;
+			}
+			else
+			{
+				if (sourceType == PathType.Unknown)
+				{
+					sourceType = PathType.Directory;
+					if (!(sourcePath.EndsWith("/") || sourcePath.EndsWith("\\")))
+					{
+						sourceFileMask = Path.GetFileName(sourcePath);
+						sourcePath = Path.GetDirectoryName(sourcePath);
+						sourceType = PathType.Directory; // assume it's a file mask
+					}
+				}
+				else if (destinationType == PathType.Unknown)
+				{
+					if (destinationPath.EndsWith("/") || destinationPath.EndsWith("\\"))
+					{
+						destinationPath = Path.Combine(destinationPath, Path.GetFileName(sourcePath));
+						destinationType = PathType.Directory;
+					}
+					else
+					{
+						destinationType = sourceType;
+					}
+				}
+
+				if (sourceType == PathType.Directory)
+				{
+					if (!Directory.Exists(sourcePath))
+						throw new ArgumentException("Source directory does not exist.");
+
+					if (destinationType == PathType.File)
+						throw new ArgumentException("Destination path cannot be a file if the source path is a directory.");
+				}
+			}
+
+			if (_exceptions.Any())
+				return;
+
 			var copyTasks = new HashSet<Task>();
+
 			try
 			{
-				PathType sourceType = GetPathType(sourcePath);
-				PathType destinationType = GetPathType(destinationPath);
-				string sourceFileMask = "*";
-
-				if (destinationType == PathType.Directory && sourceType != PathType.Unknown)
+				if (_options.CopyEmptyDirectories)
 				{
-					destinationPath = Path.Combine(destinationPath, Path.GetFileName(sourcePath));
-					destinationType = sourceType;
-				}
-				else
-				{
-					if (sourceType == PathType.Unknown)
+					if (destinationType == PathType.Directory)
 					{
-						sourceType = PathType.Directory;
-						if (!(sourcePath.EndsWith("/") || sourcePath.EndsWith("\\")))
+						if (!Directory.Exists(destinationPath))
 						{
-							sourceFileMask = Path.GetFileName(sourcePath);
-							sourcePath = Path.GetDirectoryName(sourcePath);
-							sourceType = PathType.Directory; // assume it's a file mask
+							VerboseOutput?.Invoke(this, new VerboseInfo(1, () => $"Creating destination directory \"{destinationPath}\"..."));
+							Directory.CreateDirectory(destinationPath);
 						}
 					}
-					else if (destinationType == PathType.Unknown)
+					else if (destinationType == PathType.File)
 					{
-						if (destinationPath.EndsWith("/") || destinationPath.EndsWith("\\"))
+						string destinationPathDirectory = Path.GetDirectoryName(destinationPath);
+						if (!Directory.Exists(destinationPathDirectory))
 						{
-							destinationType = PathType.Directory;
+							VerboseOutput?.Invoke(this, new VerboseInfo(1, () => $"Creating destination directory \"{destinationPathDirectory}\"..."));
+							Directory.CreateDirectory(destinationPathDirectory);
 						}
-						else
-						{
-							destinationType = sourceType;
-						}
-					}
-
-					if (sourceType == PathType.Directory)
-					{
-						if (!Directory.Exists(sourcePath))
-							throw new ArgumentException("Source directory does not exist.");
-
-						if (destinationType == PathType.File)
-							throw new ArgumentException("Destination path cannot be a file if the source path is a directory.");
-					}
-				}
-
-				if (_exceptions.Any())
-					return;
-
-				if (destinationType == PathType.Directory)
-				{
-					if (!Directory.Exists(destinationPath))
-					{
-						VerboseOutput?.Invoke(this, new VerboseInfo(1, () => $"Creating destination directory \"{destinationPath}\"..."));
-						Directory.CreateDirectory(destinationPath);
-					}
-				}
-				else if (destinationType == PathType.File)
-				{
-					string destinationPathDirectory = Path.GetDirectoryName(destinationPath);
-					if (!Directory.Exists(destinationPathDirectory))
-					{
-						VerboseOutput?.Invoke(this, new VerboseInfo(1, () => $"Creating destination directory \"{destinationPathDirectory}\"..."));
-						Directory.CreateDirectory(destinationPathDirectory);
 					}
 				}
 
@@ -145,7 +160,7 @@ namespace KrahmerSoft.ParallelFileCopierLib
 					foreach (string sourceSubDirectory in Directory.EnumerateDirectories(sourcePath))
 					{
 						string subDirectoryName = Path.GetFileName(sourceSubDirectory);
-						await CopyFilesInternalAsync(sourceSubDirectory, Path.Combine(destinationPath, subDirectoryName), level + 1);
+						await CopyFilesInternalAsync(Path.Combine(sourceSubDirectory, sourceFileMask), Path.Combine(destinationPath, subDirectoryName), level + 1);
 
 						if (_exceptions.Any())
 							return;
@@ -162,6 +177,10 @@ namespace KrahmerSoft.ParallelFileCopierLib
 					}
 				}
 			}
+			catch (ApplicationException)
+			{
+				throw;
+			}
 			catch (Exception ex)
 			{
 				throw new ApplicationException($"Failed to copy \"{sourcePath}\" -> \"{destinationPath}\"", ex);
@@ -169,14 +188,14 @@ namespace KrahmerSoft.ParallelFileCopierLib
 			finally
 			{
 				if (level == 0)
-					await Task.WhenAll(copyTasks); // wait for all queued file copies to complete
+					await Task.WhenAll(copyTasks.ToArray()); // wait for all queued file copies to complete
 			}
 		}
 
 		private async Task EnqueueCopyFileTaskAsync(HashSet<Task> copyTasks, string sourcePath, string destinationPath)
 		{
 			await _maxFileQueueLengthSemaphore.WaitAsync();
-			VerboseOutput?.Invoke(this, new VerboseInfo(1, () => $"Adding copy task to queue: \"{sourcePath}\" -> \"{destinationPath}\"..."));
+			VerboseOutput?.Invoke(this, new VerboseInfo(2, () => $"Adding copy task to queue: \"{sourcePath}\" -> \"{destinationPath}\"..."));
 			var task = CopyFileInternalAsync(sourcePath, destinationPath);
 			copyTasks.Add(task);
 			var continueTask = task.ContinueWith((antecedent) =>
@@ -185,7 +204,6 @@ namespace KrahmerSoft.ParallelFileCopierLib
 				copyTasks.Remove(task);
 				if (antecedent.Exception != null)
 				{
-					//VerboseOutput?.Invoke(this, new VerboseInfo(-1, () => $"Copy exception: {antecedent.Exception.ToString()}"));
 					lock (_exceptions)
 					{
 						_exceptions.Add(antecedent.Exception);
@@ -196,8 +214,16 @@ namespace KrahmerSoft.ParallelFileCopierLib
 
 		public async Task CopyFileAsync(string sourceFilePath, string destinationFilePath)
 		{
-			_exceptions = new List<Exception>();
-			await CopyFileInternalAsync(sourceFilePath, destinationFilePath);
+			await StartCopyOperationAsync();
+
+			try
+			{
+				await CopyFileInternalAsync(sourceFilePath, destinationFilePath);
+			}
+			finally
+			{
+				EndCopyOperation();
+			}
 		}
 
 		public async Task CopyFileInternalAsync(string sourceFilePath, string destinationFilePath)
@@ -237,6 +263,13 @@ namespace KrahmerSoft.ParallelFileCopierLib
 				if (_exceptions.Any())
 					return;
 
+				string destinationDirectory = Path.GetDirectoryName(destinationFilePath);
+				if (!Directory.Exists(destinationDirectory))
+				{
+					VerboseOutput?.Invoke(this, new VerboseInfo(1, () => $"Creating destination directory \"{destinationDirectory}\"..."));
+					Directory.CreateDirectory(destinationDirectory);
+				}
+
 				StartFileCopy?.Invoke(this, new FileCopyData() { SourceFilePath = sourceFilePath, DestinationFilePath = destinationFilePath });
 				VerboseOutput?.Invoke(this, new VerboseInfo(0, () => $"Copying \"{sourceFilePath}\" -> \"{destinationFilePath}\"..."));
 
@@ -259,7 +292,7 @@ namespace KrahmerSoft.ParallelFileCopierLib
 					if (threadNumber >= copyThreadCount - 1) // last chunk might be a bit larger to handle the slack
 						bytesToCopy = sourceFileInfo.Length - startPosition;
 
-					var task = CopyChunk(sourceFilePath, incompleteDestinationFilePath, startPosition, bytesToCopy);
+					var task = CopyChunkAsync(sourceFilePath, incompleteDestinationFilePath, startPosition, bytesToCopy);
 
 					tasks.Add(task);
 				}
@@ -276,6 +309,8 @@ namespace KrahmerSoft.ParallelFileCopierLib
 					File.Move(incompleteDestinationFilePath, destinationFilePath);
 				}
 
+				Interlocked.Increment(ref _copiedFileCount);
+				ShowStatistics(1);
 				EndFileCopy?.Invoke(this, new FileCopyData() { SourceFilePath = sourceFilePath, DestinationFilePath = destinationFilePath });
 			}
 			catch (Exception ex)
@@ -299,7 +334,7 @@ namespace KrahmerSoft.ParallelFileCopierLib
 			}
 		}
 
-		private async Task CopyChunk(string sourceFilePath, string destinationFilePath, long startPosition, long bytesToCopy)
+		private async Task CopyChunkAsync(string sourceFilePath, string destinationFilePath, long startPosition, long bytesToCopy)
 		{
 			int bufferSize = _options.BufferSize;
 			var buffer = new byte[bufferSize];
@@ -333,8 +368,51 @@ namespace KrahmerSoft.ParallelFileCopierLib
 					await writer.WriteAsync(buffer, 0, bytesRead);
 
 					bytesToCopyRemaining -= bytesRead;
+					Interlocked.Add(ref _copiedByteCount, bytesRead);
 				} while (true);
 			}
+		}
+
+		private async Task StartCopyOperationAsync()
+		{
+			await _copyOperationsSemaphore.WaitAsync(); // only 1 user operation at a time
+			_exceptions = new List<Exception>();
+			_copyStopwatch = new Stopwatch();
+			_copyStopwatch.Start();
+		}
+
+		private void EndCopyOperation()
+		{
+			try
+			{
+				_copyStopwatch.Stop();
+
+				if (_exceptions.Count == 1)
+					throw _exceptions[0];
+
+				if (_exceptions.Count > 1)
+					throw new AggregateException(_exceptions);
+
+				ShowStatistics(0);
+			}
+			finally
+			{
+				_copyOperationsSemaphore.Release();
+			}
+		}
+
+		private void ShowStatistics(int verboseLevel)
+		{
+			var copyStopwatchElapsed = _copyStopwatch.Elapsed;
+			var totalSeconds = _copyStopwatch.Elapsed.TotalSeconds;
+			var copiedFileCount = _copiedFileCount;
+			var copiedByteCount = _copiedByteCount;
+
+			if (totalSeconds <= 0.0001)
+				totalSeconds = 0.0001; // Prevent divide by zero
+
+			double bytesPerSecond = copiedByteCount / totalSeconds;
+			VerboseOutput?.Invoke(this, new VerboseInfo(verboseLevel, () => $"Copied {copiedFileCount:#,##0} files ({copiedByteCount:#,##0} bytes) in {copyStopwatchElapsed.ToString("g")} ({bytesPerSecond:#,##0} b/s)"));
 		}
 
 		private enum PathType

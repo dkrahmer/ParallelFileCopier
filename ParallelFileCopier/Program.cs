@@ -28,9 +28,25 @@ namespace KrahmerSoft.ParallelFileCopierCli
 			{
 				await parallelFileCopier.CopyFilesAsync(_optionsCli.SourcePath, _optionsCli.DestinationPath);
 			}
+			catch (ApplicationException ex)
+			{
+				Console.Error.WriteLine(ex.Message);
+				return 1;
+			}
+			catch (ArgumentException ex)
+			{
+				Console.Error.WriteLine(ex.Message);
+				return 1;
+			}
 			catch (Exception ex)
 			{
 				Console.Error.WriteLine(ex.ToString());
+				return 1;
+			}
+			finally
+			{
+				parallelFileCopier.VerboseOutput -= HandleVerboseOutput;
+				parallelFileCopier = null;
 			}
 
 			return 0;

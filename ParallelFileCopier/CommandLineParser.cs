@@ -57,6 +57,11 @@ namespace KrahmerSoft.ParallelFileCopierCli
 							optionsCli.UseIncompleteFilename = GetNextArgAsBool(args, ref argIndex);
 							break;
 
+						case "--copy-empty-directories":
+						case "-e":
+							optionsCli.CopyEmptyDirectories = true;
+							break;
+
 						case "--verbose":
 						case "-v":
 							optionsCli.ShowVerboseLevel++;
@@ -123,15 +128,16 @@ namespace KrahmerSoft.ParallelFileCopierCli
 			Console.WriteLine($"  [DESTINATION-PATH]             path to the destination file or directory");
 			Console.WriteLine();
 			Console.WriteLine($"Optional arguments:");
-			Console.WriteLine($"  -f, --max-concurrent-files     maximum concurrent file copies (default: {defaultValues.MaxConcurrentFiles})");
-			Console.WriteLine($"  -t, --max-threads-per-file     maximum concurrent copy stream threads per file (default: {defaultValues.MaxThreadsPerFile})");
-			Console.WriteLine($"  -T, --max-total-threads        maximum total concurrent copy stream threads overall (default: {defaultValues.MaxTotalThreads})");
 			Console.WriteLine($"  -b, --buffer-size              copy buffer size (default: {defaultValues.BufferSize})");
-			Console.WriteLine($"  -l, --max-file-queue-length    maximum copy task queue length - source directory is scanned in background (default: {defaultValues.MaxFileQueueLength})");
+			Console.WriteLine($"  -e, --copy-empty-directories   copy directories, even if they are empty (default: {(defaultValues.CopyEmptyDirectories ? "true" : "false")})");
 			Console.WriteLine($"  -i, --use-incomplete-filename  use 'incomplete' filename while copying file data before renaming (default: {(defaultValues.UseIncompleteFilename ? "true" : "false")})");
-			Console.WriteLine($"  -q, --quiet                    quite, no output");
-			Console.WriteLine($"  -v, --verbose                  increase verbose output (Example: -vvv for verbosity level 3)");
+			Console.WriteLine($"  -f, --max-concurrent-files     maximum concurrent file copies (default: {defaultValues.MaxConcurrentFiles})");
 			Console.WriteLine($"  -h, --help                     display this help information");
+			Console.WriteLine($"  -l, --max-file-queue-length    maximum copy task queue length - source directory is scanned in background (default: {defaultValues.MaxFileQueueLength})");
+			Console.WriteLine($"  -q, --quiet                    quite, no output (except for errors)");
+			Console.WriteLine($"  -T, --max-total-threads        maximum total concurrent copy stream threads overall (default: {defaultValues.MaxTotalThreads})");
+			Console.WriteLine($"  -t, --max-threads-per-file     maximum concurrent copy stream threads per file (default: {defaultValues.MaxThreadsPerFile})");
+			Console.WriteLine($"  -v, --verbose                  increase verbose output (Example: -vvv for verbosity level 3)");
 		}
 
 		private static string GetNextArg(string[] args, ref int currentArgIndex)
