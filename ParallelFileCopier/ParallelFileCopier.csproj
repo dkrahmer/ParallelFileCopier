@@ -1,0 +1,14 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>netcoreapp2.1</TargetFramework>
+    <RootNamespace>KrahmerSoft.ParallelFileCopierCli</RootNamespace>
+    <AssemblyName>ParallelFileCopier2</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ParallelFileCopierLib\ParallelFileCopierLib.csproj" />
+  </ItemGroup>
+
+</Project>
