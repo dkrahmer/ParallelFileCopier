@@ -21,32 +21,33 @@ namespace KrahmerSoft.ParallelFileCopierCli
 			if (!_optionsCli.ValidateOptions())
 				return 1;
 
-			var parallelFileCopier = new ParallelFileCopier(_optionsCli);
-			parallelFileCopier.VerboseOutput += HandleVerboseOutput;
+			using (var parallelFileCopier = new ParallelFileCopier(_optionsCli))
+			{
+				parallelFileCopier.VerboseOutput += HandleVerboseOutput;
 
-			try
-			{
-				await parallelFileCopier.CopyFilesAsync(_optionsCli.SourcePath, _optionsCli.DestinationPath);
-			}
-			catch (ApplicationException ex)
-			{
-				Console.Error.WriteLine(ex.Message);
-				return 1;
-			}
-			catch (ArgumentException ex)
-			{
-				Console.Error.WriteLine(ex.Message);
-				return 1;
-			}
-			catch (Exception ex)
-			{
-				Console.Error.WriteLine(ex.ToString());
-				return 1;
-			}
-			finally
-			{
-				parallelFileCopier.VerboseOutput -= HandleVerboseOutput;
-				parallelFileCopier = null;
+				try
+				{
+					await parallelFileCopier.CopyFilesAsync(_optionsCli.SourcePath, _optionsCli.DestinationPath);
+				}
+				catch (ApplicationException ex)
+				{
+					Console.Error.WriteLine(ex.Message);
+					return 1;
+				}
+				catch (ArgumentException ex)
+				{
+					Console.Error.WriteLine(ex.Message);
+					return 1;
+				}
+				catch (Exception ex)
+				{
+					Console.Error.WriteLine(ex.ToString());
+					return 1;
+				}
+				finally
+				{
+					parallelFileCopier.VerboseOutput -= HandleVerboseOutput;
+				}
 			}
 
 			return 0;

@@ -57,6 +57,11 @@ namespace KrahmerSoft.ParallelFileCopierCli
 							optionsCli.UseIncompleteFilename = GetNextArgAsBool(args, ref argIndex);
 							break;
 
+						case "--incremental-source-path":
+						case "-I":
+							optionsCli.IncrementalSourcePath = GetNextArg(args, ref argIndex).TrimEnd(new char[] { '/', '\\' });
+							break;
+
 						case "--copy-empty-directories":
 						case "-e":
 							optionsCli.CopyEmptyDirectories = true;
@@ -130,6 +135,9 @@ namespace KrahmerSoft.ParallelFileCopierCli
 			Console.WriteLine($"Optional arguments:");
 			Console.WriteLine($"  -b, --buffer-size              copy buffer size (default: {defaultValues.BufferSize})");
 			Console.WriteLine($"  -e, --copy-empty-directories   copy directories, even if they are empty (default: {(defaultValues.CopyEmptyDirectories ? "true" : "false")})");
+			Console.WriteLine($"  -I, --incremental-source-path  use incremented paths for each read stream for a single file (useful for copies over SSHFS mounts)");
+			Console.WriteLine($"                                 _{{threadNumber}} will be appended to the given ABSOLUTE base source path starting with 2 for the 2nd thread.");
+			Console.WriteLine($"                                 enough incremental symbolic links should be created to handle max-threads-per-file");
 			Console.WriteLine($"  -i, --use-incomplete-filename  use 'incomplete' filename while copying file data before renaming (default: {(defaultValues.UseIncompleteFilename ? "true" : "false")})");
 			Console.WriteLine($"  -f, --max-concurrent-files     maximum concurrent file copies (default: {defaultValues.MaxConcurrentFiles})");
 			Console.WriteLine($"  -h, --help                     display this help information");

@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -8,7 +9,7 @@ using System.Threading.Tasks;
 
 namespace KrahmerSoft.ParallelFileCopierLib
 {
-	public class ParallelFileCopier
+	public class ParallelFileCopier : IDisposable
 	{
 		private SemaphoreSlim _copyOperationsSemaphore = new SemaphoreSlim(1);
 		private SemaphoreSlim _concurrentFilesSemaphore;
@@ -16,7 +17,8 @@ namespace KrahmerSoft.ParallelFileCopierLib
 		private SemaphoreSlim _maxTotalThreadsSemaphore;
 		private SemaphoreSlim _maxTotalThreadsSafetySemaphore = new SemaphoreSlim(1);
 		private ParallelFileCopierOptions _options;
-		private List<Exception> _exceptions;
+		private ConcurrentBag<Exception> _exceptions;
+		private ConcurrentHashSet<Task> _copyFileTasks;
 		private long _copiedFileCount;
 		private long _copiedByteCount;
 		private Stopwatch _copyStopwatch;
@@ -59,7 +61,7 @@ namespace KrahmerSoft.ParallelFileCopierLib
 				await CopyFilesInternalAsync(sourcePath, destinationPath, 0);
 
 				if (_exceptions.Count == 1)
-					throw _exceptions[0];
+					throw _exceptions.FirstOrDefault();
 
 				if (_exceptions.Count > 1)
 					throw new AggregateException(_exceptions);
@@ -119,8 +121,6 @@ namespace KrahmerSoft.ParallelFileCopierLib
 			if (_exceptions.Any())
 				return;
 
-			var copyTasks = new HashSet<Task>();
-
 			try
 			{
 				if (_options.CopyEmptyDirectories)
@@ -152,25 +152,25 @@ namespace KrahmerSoft.ParallelFileCopierLib
 						destinationPath = Path.Combine(destinationPath, Path.GetFileName(sourcePath));
 					}
 
-					await EnqueueCopyFileTaskAsync(copyTasks, sourcePath, destinationPath);
+					await EnqueueCopyFileTaskAsync(_copyFileTasks, sourcePath, destinationPath);
 				}
 				else
 				{
-					VerboseOutput?.Invoke(this, new VerboseInfo(1, () => $"Reading source subdirectories list from \"{sourcePath}\"..."));
-					foreach (string sourceSubDirectory in Directory.EnumerateDirectories(sourcePath))
+					VerboseOutput?.Invoke(this, new VerboseInfo(1, () => $"Reading source files list from \"{sourcePath}\"..."));
+					foreach (string sourceFilePath in Directory.EnumerateFiles(sourcePath, sourceFileMask))
 					{
-						string subDirectoryName = Path.GetFileName(sourceSubDirectory);
-						await CopyFilesInternalAsync(Path.Combine(sourceSubDirectory, sourceFileMask), Path.Combine(destinationPath, subDirectoryName), level + 1);
+						string sourceFilename = Path.GetFileName(sourceFilePath);
+						await EnqueueCopyFileTaskAsync(_copyFileTasks, sourceFilePath, Path.Combine(destinationPath, sourceFilename));
 
 						if (_exceptions.Any())
 							return;
 					}
 
-					VerboseOutput?.Invoke(this, new VerboseInfo(1, () => $"Reading source files list from \"{sourcePath}\"..."));
-					foreach (string sourceFilePath in Directory.EnumerateFiles(sourcePath, sourceFileMask))
+					VerboseOutput?.Invoke(this, new VerboseInfo(1, () => $"Reading source subdirectories list from \"{sourcePath}\"..."));
+					foreach (string sourceSubDirectory in Directory.EnumerateDirectories(sourcePath))
 					{
-						string sourceFilename = Path.GetFileName(sourceFilePath);
-						await EnqueueCopyFileTaskAsync(copyTasks, sourceFilePath, Path.Combine(destinationPath, sourceFilename));
+						string subDirectoryName = Path.GetFileName(sourceSubDirectory);
+						await CopyFilesInternalAsync(Path.Combine(sourceSubDirectory, sourceFileMask), Path.Combine(destinationPath, subDirectoryName), level + 1);
 
 						if (_exceptions.Any())
 							return;
@@ -188,27 +188,41 @@ namespace KrahmerSoft.ParallelFileCopierLib
 			finally
 			{
 				if (level == 0)
-					await Task.WhenAll(copyTasks.ToArray()); // wait for all queued file copies to complete
+					await Task.WhenAll(_copyFileTasks.ToArray()); // wait for all queued file copies to complete
 			}
 		}
 
-		private async Task EnqueueCopyFileTaskAsync(HashSet<Task> copyTasks, string sourcePath, string destinationPath)
+		private async Task EnqueueCopyFileTaskAsync(ConcurrentHashSet<Task> copyTasks, string sourcePath, string destinationPath)
 		{
 			await _maxFileQueueLengthSemaphore.WaitAsync();
 			VerboseOutput?.Invoke(this, new VerboseInfo(2, () => $"Adding copy task to queue: \"{sourcePath}\" -> \"{destinationPath}\"..."));
-			var task = CopyFileInternalAsync(sourcePath, destinationPath);
-			copyTasks.Add(task);
-			var continueTask = task.ContinueWith((antecedent) =>
+
+			var copyFileTask = CopyFileInternalAsync(sourcePath, destinationPath);
+			copyTasks.Add(copyFileTask);
+
+			var cleanupTask = copyFileTask.ContinueWith((antecedent) =>
 			{
-				_maxFileQueueLengthSemaphore.Release();
-				copyTasks.Remove(task);
-				if (antecedent.Exception != null)
+				try
 				{
-					lock (_exceptions)
+					if (antecedent.Exception != null)
 					{
-						_exceptions.Add(antecedent.Exception);
+						lock (_exceptions)
+						{
+							_exceptions.Add(antecedent.Exception);
+						}
 					}
+					copyTasks.Remove(copyFileTask);
 				}
+				finally
+				{
+					_maxFileQueueLengthSemaphore.Release();
+				}
+			});
+			copyTasks.Add(cleanupTask);
+
+			var finalizeTask = cleanupTask.ContinueWith((antecedent) =>
+			{
+				copyTasks.Remove(cleanupTask);
 			});
 		}
 
@@ -246,7 +260,10 @@ namespace KrahmerSoft.ParallelFileCopierLib
 
 				int minChunkSize = bufferSize;
 				var sourceFileInfo = new FileInfo(sourceFilePath);
-				long absoluteMaxThreadCount = (int)(sourceFileInfo.Length < minChunkSize ? 1 : sourceFileInfo.Length / minChunkSize);
+
+				// make sure each thread will transfer at least 8 chunks to make it worth our while to create a thread
+				int minBytesPerChunk = minChunkSize * 8;
+				long absoluteMaxThreadCount = (int)(sourceFileInfo.Length < minBytesPerChunk ? 1 : sourceFileInfo.Length / minBytesPerChunk);
 
 				if (copyThreadCount > absoluteMaxThreadCount)
 					copyThreadCount = (int)absoluteMaxThreadCount;
@@ -292,7 +309,17 @@ namespace KrahmerSoft.ParallelFileCopierLib
 					if (threadNumber >= copyThreadCount - 1) // last chunk might be a bit larger to handle the slack
 						bytesToCopy = sourceFileInfo.Length - startPosition;
 
-					var task = CopyChunkAsync(sourceFilePath, incompleteDestinationFilePath, startPosition, bytesToCopy);
+					string sourceFilePathOverride = sourceFilePath;
+					if (threadNumber > 0 && !string.IsNullOrWhiteSpace(_options.IncrementalSourcePath)
+						&& sourceFilePathOverride.StartsWith(_options.IncrementalSourcePath, StringComparison.InvariantCultureIgnoreCase))
+					{
+						sourceFilePathOverride = sourceFilePathOverride.Substring(0, _options.IncrementalSourcePath.Length)
+							+ $"_{threadNumber + 1}"
+							+ sourceFilePathOverride.Substring(_options.IncrementalSourcePath.Length);
+						VerboseOutput?.Invoke(this, new VerboseInfo(2, () => $"Using IncrementalSymLinkSourcePath \"{sourceFilePathOverride}\""));
+					}
+
+					var task = CopyChunkAsync(sourceFilePathOverride, incompleteDestinationFilePath, startPosition, bytesToCopy);
 
 					tasks.Add(task);
 				}
@@ -376,7 +403,8 @@ namespace KrahmerSoft.ParallelFileCopierLib
 		private async Task StartCopyOperationAsync()
 		{
 			await _copyOperationsSemaphore.WaitAsync(); // only 1 user operation at a time
-			_exceptions = new List<Exception>();
+			_copyFileTasks = new ConcurrentHashSet<Task>();
+			_exceptions = new ConcurrentBag<Exception>();
 			_copyStopwatch = new Stopwatch();
 			_copyStopwatch.Start();
 		}
@@ -388,12 +416,13 @@ namespace KrahmerSoft.ParallelFileCopierLib
 				_copyStopwatch.Stop();
 
 				if (_exceptions.Count == 1)
-					throw _exceptions[0];
+					throw _exceptions.FirstOrDefault();
 
 				if (_exceptions.Count > 1)
 					throw new AggregateException(_exceptions);
 
 				ShowStatistics(0);
+				VerboseOutput?.Invoke(this, new VerboseInfo(0, () => $"Copy complete."));
 			}
 			finally
 			{
@@ -436,5 +465,42 @@ namespace KrahmerSoft.ParallelFileCopierLib
 
 			return PathType.Unknown;
 		}
+
+		#region IDisposable Support
+		private bool _disposedValue = false; // To detect redundant calls
+
+		protected virtual void Dispose(bool disposing)
+		{
+			if (!_disposedValue)
+			{
+				if (disposing)
+				{
+					// dispose managed state (managed objects).
+				}
+
+				_copyOperationsSemaphore?.Dispose();
+				_concurrentFilesSemaphore?.Dispose();
+				_maxFileQueueLengthSemaphore?.Dispose();
+				_maxTotalThreadsSemaphore?.Dispose();
+				_maxTotalThreadsSafetySemaphore?.Dispose();
+
+				_copyOperationsSemaphore = null;
+				_concurrentFilesSemaphore = null;
+				_maxFileQueueLengthSemaphore = null;
+				_maxTotalThreadsSemaphore = null;
+				_maxTotalThreadsSafetySemaphore = null;
+				_copyFileTasks = null;
+
+				_disposedValue = true;
+			}
+		}
+
+		// This code added to correctly implement the disposable pattern.
+		public void Dispose()
+		{
+			// Do not change this code. Put cleanup code in Dispose(bool disposing) above.
+			Dispose(true);
+		}
+		#endregion
 	}
 }
