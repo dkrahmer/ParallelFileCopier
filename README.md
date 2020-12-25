@@ -43,7 +43,7 @@ Example:
   - Remote primary source directory: /home/remote-user/download
   - Remote symlinks that point to the primary source: /home/remote-user/download_2, /home/remote-user/download_3, etc...
   - Local mount to remote directory over SSHFS with *max_conns=8: /mnt/remote-sshfs/ -> /home/remote-user/
-  - Copy command: ParallelFileCopier -I /mnt/remote-sshfs/download /mnt/remote-sshfs/download/ /home/local-user/download/file.bin
-    - ParallelFileCopier will enumerates the "download" directory to access the symlinks and force multiple connections to be made.
+  - Copy command: ```ParallelFileCopier -I /mnt/remote-sshfs/download /mnt/remote-sshfs/download/stuff /home/local-user/download/```
+    - ParallelFileCopier will enumerate the "download" directory to access the symlinks and force multiple connections to be made.
 
 *max_conns was added in sshfs-3.7.1 and is required to allow parallel file copying. See release info: https://www.ctolib.com/article/releases/36784
