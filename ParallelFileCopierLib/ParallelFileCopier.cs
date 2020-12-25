@@ -293,22 +293,25 @@ namespace KrahmerSoft.ParallelFileCopierLib
 				if (File.Exists(destinationFilePath))
 					File.Delete(destinationFilePath);
 
-				long chunkSize = sourceFileInfo.Length / copyThreadCount;
 				using (var writer = new FileStream(incompleteDestinationFilePath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize, FileOptions.Asynchronous | FileOptions.RandomAccess))
 				{
-					// Allocate space in the new file
-					writer.SetLength(sourceFileInfo.Length);
+					// Init the new file
+					writer.SetLength(0);
 				}
 
 				var tasks = new List<Task>();
 
+				long currentFileChunkNumber = -1;
+
+				Func<long> getNextFileChunkNumber = () =>
+				{
+					return Interlocked.Increment(ref currentFileChunkNumber);
+				};
+
+				var resizeFileLock = new SemaphoreSlim(1);
+
 				for (int threadNumber = 0; threadNumber < copyThreadCount; threadNumber++)
 				{
-					long startPosition = threadNumber * chunkSize;
-					long bytesToCopy = chunkSize;
-					if (threadNumber >= copyThreadCount - 1) // last chunk might be a bit larger to handle the slack
-						bytesToCopy = sourceFileInfo.Length - startPosition;
-
 					string sourceFilePathOverride = sourceFilePath;
 					if (threadNumber > 0 && !string.IsNullOrWhiteSpace(_options.IncrementalSourcePath)
 						&& sourceFilePathOverride.StartsWith(_options.IncrementalSourcePath, StringComparison.InvariantCultureIgnoreCase))
@@ -319,7 +322,7 @@ namespace KrahmerSoft.ParallelFileCopierLib
 						VerboseOutput?.Invoke(this, new VerboseInfo(2, () => $"Using IncrementalSymLinkSourcePath \"{sourceFilePathOverride}\""));
 					}
 
-					var task = CopyChunkAsync(sourceFilePathOverride, incompleteDestinationFilePath, startPosition, bytesToCopy);
+					var task = CopyChunksAsync(sourceFilePathOverride, incompleteDestinationFilePath, bufferSize, getNextFileChunkNumber, resizeFileLock);
 
 					tasks.Add(task);
 				}
@@ -334,6 +337,27 @@ namespace KrahmerSoft.ParallelFileCopierLib
 						File.Delete(destinationFilePath);
 
 					File.Move(incompleteDestinationFilePath, destinationFilePath);
+				}
+
+				var destinationFileInfo = new FileInfo(destinationFilePath);
+
+				try
+				{
+					destinationFileInfo.LastWriteTime = sourceFileInfo.LastWriteTime;
+					destinationFileInfo.CreationTimeUtc = sourceFileInfo.CreationTimeUtc;
+				}
+				catch (Exception ex)
+				{
+					throw new ApplicationException("Failed to set destination write and create times.", ex);
+				}
+
+				try
+				{
+					destinationFileInfo.Attributes = sourceFileInfo.Attributes;
+				}
+				catch (Exception ex)
+				{
+					throw new ApplicationException("Failed to set destination attributes.", ex);
 				}
 
 				Interlocked.Increment(ref _copiedFileCount);
@@ -361,25 +385,43 @@ namespace KrahmerSoft.ParallelFileCopierLib
 			}
 		}
 
-		private async Task CopyChunkAsync(string sourceFilePath, string destinationFilePath, long startPosition, long bytesToCopy)
+		private async Task CopyChunksAsync(string sourceFilePath, string destinationFilePath, int bufferSize, Func<long> getNextFileChunkNumber, SemaphoreSlim resizeFileLock)
 		{
-			int bufferSize = _options.BufferSize;
 			var buffer = new byte[bufferSize];
-
-			long bytesToCopyRemaining = bytesToCopy;
 			long totalBytesRead = 0;
 
 			using (var writer = new FileStream(destinationFilePath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite, bufferSize, FileOptions.Asynchronous | FileOptions.RandomAccess))
 			using (var reader = new FileStream(sourceFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, bufferSize, FileOptions.Asynchronous | FileOptions.RandomAccess))
 			{
-				writer.Seek(startPosition, SeekOrigin.Begin);
-				reader.Seek(startPosition, SeekOrigin.Begin);
-
 				do
 				{
+					long fileChunkNumber = getNextFileChunkNumber();
+					long startPosition = fileChunkNumber * bufferSize;
+					long bytesToCopy = bufferSize;
+					long minFileSize = startPosition + bytesToCopy;
+					if (minFileSize > reader.Length)
+					{
+						minFileSize = reader.Length;
+						bytesToCopy = reader.Length - startPosition;
+					}
+
+					if (bytesToCopy <= 0)
+						break;
+
+					await resizeFileLock.WaitAsync();
+					try
+					{
+						if (writer.Length < minFileSize)
+							writer.SetLength(minFileSize);
+					}
+					finally
+					{
+						resizeFileLock.Release();
+					}
+					writer.Seek(startPosition, SeekOrigin.Begin);
+					reader.Seek(startPosition, SeekOrigin.Begin);
+
 					int bytesToRead = bufferSize;
-					if (bytesToRead > bytesToCopyRemaining)
-						bytesToRead = (int)bytesToCopyRemaining;
 
 					if (bytesToRead <= 0)
 						break;
@@ -394,7 +436,6 @@ namespace KrahmerSoft.ParallelFileCopierLib
 					VerboseOutput?.Invoke(this, new VerboseInfo(3, () => $"Writing {bytesToRead:#,##0} bytes to \"{destinationFilePath}\" ({startPosition:#,##0}-{startPosition + bytesRead:#,##0})..."));
 					await writer.WriteAsync(buffer, 0, bytesRead);
 
-					bytesToCopyRemaining -= bytesRead;
 					Interlocked.Add(ref _copiedByteCount, bytesRead);
 				} while (true);
 			}
