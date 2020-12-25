@@ -31,3 +31,19 @@ Optional arguments:
   -t, --max-threads-per-file     maximum concurrent copy stream threads per file (default: 4)
   -v, --verbose                  increase verbose output (Example: -vvv for verbosity level 3)
 ```
+
+### --incremental-source-path explanation
+
+The --incremental-source-path feature is mainly useful for transferring large files from remote mounted file systems, such as SSHFS (FUSE).
+SSHFS always uses a single connection and single thread for each file path rather than each file stream.
+Using --incremental-source-path is a hack that tricks the underlying handler into making multiple connections to the remote server for a single file.
+This feature requires the creation of directory symlinks on the remote file system before copying any files.
+
+Example:
+  - Remote primary source directory: /home/remote-user/download
+  - Remote symlinks that point to the primary source: /home/remote-user/download_2, /home/remote-user/download_3, etc...
+  - Local mount to remote directory over SSHFS with *max_conns=8: /mnt/remote-sshfs/ -> /home/remote-user/
+  - Copy command: ParallelFileCopier -I /mnt/remote-sshfs/download /mnt/remote-sshfs/download/ /home/local-user/download/file.bin
+    - ParallelFileCopier will enumerates the "download" directory to access the symlinks and force multiple connections to be made.
+
+*max_conns was added in sshfs-3.7.1 and is required to allow parallel file copying. See release info: https://www.ctolib.com/article/releases/36784
