@@ -2,9 +2,11 @@ name: Build
 
 on:
   push:
-    branches: ["**"]
+    branches:
+    - "**"
   pull_request:
-    branches: ["**"]
+    branches:
+    - "**"
 
 jobs:
   build:
@@ -12,14 +14,31 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+    - name: Pull Git repo
+      uses: actions/checkout@v3
+
     - name: Setup .NET
       uses: actions/setup-dotnet@v2
       with:
         dotnet-version: 3.1.x
+
     - name: Restore dependencies
       run: dotnet restore
+
     - name: Build
       run: dotnet build --no-restore --configuration Release
+
     - name: Test
       run: dotnet test --no-build --verbosity normal --configuration Release
+
+    - name: Create artifact ParallelFileCopierCli
+      uses: actions/upload-artifact@v3
+      with:
+        name: ParallelFileCopierCli
+        path: ParallelFileCopier/bin/Release/netcoreapp3.1/*
+
+    - name: Create artifact ParallelFileCopierLib
+      uses: actions/upload-artifact@v3
+      with:
+        name: ParallelFileCopierCli
+        path: ParallelFileCopierLib/bin/Release/netstandard2.0/*
