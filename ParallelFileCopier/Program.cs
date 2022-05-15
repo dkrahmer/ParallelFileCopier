@@ -28,6 +28,8 @@ namespace KrahmerSoft.ParallelFileCopierCli
 				try
 				{
 					await parallelFileCopier.CopyFilesAsync(_optionsCli.SourcePath, _optionsCli.DestinationPath);
+
+					return 0;
 				}
 				catch (ApplicationException ex)
 				{
@@ -49,8 +51,6 @@ namespace KrahmerSoft.ParallelFileCopierCli
 					parallelFileCopier.VerboseOutput -= HandleVerboseOutput;
 				}
 			}
-
-			return 0;
 		}
 
 		private static void HandleVerboseOutput(object sender, VerboseInfo e)

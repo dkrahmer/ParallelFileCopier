@@ -10,5 +10,6 @@
 		public bool UseIncompleteFilename { get; set; } = true;
 		public bool CopyEmptyDirectories { get; set; } = false;
 		public string IncrementalSourcePath { get; set; }
+		public int MinChunksPerThread { get; set; } = 32;
 	}
 }

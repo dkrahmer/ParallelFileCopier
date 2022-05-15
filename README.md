@@ -18,18 +18,33 @@ Required arguments:
 
 Optional arguments:
   -b, --buffer-size              copy buffer size (default: 131072)
-  -e, --copy-empty-directories   copy directories, even if they are empty (default: false)
-  -I, --incremental-source-path  use incremented paths for each read stream for a single file (useful for copies over SSHFS mounts)
-                                 _{threadNumber} will be appended to the given ABSOLUTE base source path starting with 2 for the 2nd thread.
-                                 enough incremental symbolic links should be created to handle max-threads-per-file
-  -i, --use-incomplete-filename  use 'incomplete' filename while copying file data before renaming (default: true)
+  -c, --min-chunks-per-thread    minimum chunks per copy thread - determines
+                                 max threads per file based on total file size
+                                 (default: 32)
+  -e, --copy-empty-directories   copy directories, even if they are empty
+                                 (default: false)
   -f, --max-concurrent-files     maximum concurrent file copies (default: 4)
   -h, --help                     display this help information
-  -l, --max-file-queue-length    maximum copy task queue length - source directory is scanned in background (default: 50)
-  -q, --quiet                    quite, no output
-  -T, --max-total-threads        maximum total concurrent copy stream threads overall (default: 4)
-  -t, --max-threads-per-file     maximum concurrent copy stream threads per file (default: 4)
-  -v, --verbose                  increase verbose output (Example: -vvv for verbosity level 3)
+  -I, --incremental-source-path  use incremented paths for each read stream
+                                 for a single file (useful for copies over
+                                 SSHFS mounts)
+                                 _{threadNumber} will be appended to the
+                                 given ABSOLUTE base source path starting
+                                 with 2 for the 2nd thread.
+                                 enough incremental symbolic links should be
+                                 created to handle max-threads-per-file
+  -i, --use-incomplete-filename  use 'incomplete' filename while copying file
+                                 data before renaming (default: true)
+  -l, --max-file-queue-length    maximum copy task queue length - source
+                                 directory is scanned in background
+                                 (default: 50)
+  -q, --quiet                    quite, no output (except for errors)
+  -T, --max-total-threads        maximum total concurrent copy stream threads
+                                 overall (default: 4)
+  -t, --max-threads-per-file     maximum concurrent copy stream threads per
+                                 file (default: 4)
+  -v, --verbose                  increase verbose output
+                                 (Example: -vvv for verbosity level 3)
 ```
 
 ### --incremental-source-path explanation
