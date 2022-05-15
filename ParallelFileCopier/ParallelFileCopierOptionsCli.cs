@@ -7,7 +7,7 @@ namespace KrahmerSoft.ParallelFileCopierCli
 	{
 		public string SourcePath { get; set; }
 		public string DestinationPath { get; set; }
-		public int ShowVerboseLevel { get; internal set; }
+		public int ShowVerboseLevel { get; set; }
 
 		public bool ValidateOptions()
 		{

@@ -52,6 +52,11 @@ namespace KrahmerSoft.ParallelFileCopierCli
 							optionsCli.MaxFileQueueLength = GetNextArgAsInt(args, ref argIndex);
 							break;
 
+						case "--min-chunks-per-thread":
+						case "-c":
+							optionsCli.MinChunksPerThread = GetNextArgAsInt(args, ref argIndex);
+							break;
+
 						case "--use-incomplete-filename":
 						case "-i":
 							optionsCli.UseIncompleteFilename = GetNextArgAsBool(args, ref argIndex);
@@ -134,18 +139,33 @@ namespace KrahmerSoft.ParallelFileCopierCli
 			Console.WriteLine();
 			Console.WriteLine($"Optional arguments:");
 			Console.WriteLine($"  -b, --buffer-size              copy buffer size (default: {defaultValues.BufferSize})");
-			Console.WriteLine($"  -e, --copy-empty-directories   copy directories, even if they are empty (default: {(defaultValues.CopyEmptyDirectories ? "true" : "false")})");
-			Console.WriteLine($"  -I, --incremental-source-path  use incremented paths for each read stream for a single file (useful for copies over SSHFS mounts)");
-			Console.WriteLine($"                                 _{{threadNumber}} will be appended to the given ABSOLUTE base source path starting with 2 for the 2nd thread.");
-			Console.WriteLine($"                                 enough incremental symbolic links should be created to handle max-threads-per-file");
-			Console.WriteLine($"  -i, --use-incomplete-filename  use 'incomplete' filename while copying file data before renaming (default: {(defaultValues.UseIncompleteFilename ? "true" : "false")})");
+			Console.WriteLine($"  -c, --min-chunks-per-thread    minimum chunks per copy thread - determines");
+			Console.WriteLine($"                                 max threads per file based on total file size");
+			Console.WriteLine($"                                 (default: {defaultValues.MinChunksPerThread})");
+			Console.WriteLine($"  -e, --copy-empty-directories   copy directories, even if they are empty");
+			Console.WriteLine($"                                 (default: {(defaultValues.CopyEmptyDirectories ? "true" : "false")})");
 			Console.WriteLine($"  -f, --max-concurrent-files     maximum concurrent file copies (default: {defaultValues.MaxConcurrentFiles})");
 			Console.WriteLine($"  -h, --help                     display this help information");
-			Console.WriteLine($"  -l, --max-file-queue-length    maximum copy task queue length - source directory is scanned in background (default: {defaultValues.MaxFileQueueLength})");
+			Console.WriteLine($"  -I, --incremental-source-path  use incremented paths for each read stream");
+			Console.WriteLine($"                                 for a single file (useful for copies over");
+			Console.WriteLine($"                                 SSHFS mounts)");
+			Console.WriteLine($"                                 _{{threadNumber}} will be appended to the");
+			Console.WriteLine($"                                 given ABSOLUTE base source path starting");
+			Console.WriteLine($"                                 with 2 for the 2nd thread.");
+			Console.WriteLine($"                                 enough incremental symbolic links should be");
+			Console.WriteLine($"                                 created to handle max-threads-per-file");
+			Console.WriteLine($"  -i, --use-incomplete-filename  use 'incomplete' filename while copying file");
+			Console.WriteLine($"                                 data before renaming (default: {(defaultValues.UseIncompleteFilename ? "true" : "false")})");
+			Console.WriteLine($"  -l, --max-file-queue-length    maximum copy task queue length - source");
+			Console.WriteLine($"                                 directory is scanned in background");
+			Console.WriteLine($"                                 (default: {defaultValues.MaxFileQueueLength})");
 			Console.WriteLine($"  -q, --quiet                    quite, no output (except for errors)");
-			Console.WriteLine($"  -T, --max-total-threads        maximum total concurrent copy stream threads overall (default: {defaultValues.MaxTotalThreads})");
-			Console.WriteLine($"  -t, --max-threads-per-file     maximum concurrent copy stream threads per file (default: {defaultValues.MaxThreadsPerFile})");
-			Console.WriteLine($"  -v, --verbose                  increase verbose output (Example: -vvv for verbosity level 3)");
+			Console.WriteLine($"  -T, --max-total-threads        maximum total concurrent copy stream threads");
+			Console.WriteLine($"                                 overall (default: {defaultValues.MaxTotalThreads})");
+			Console.WriteLine($"  -t, --max-threads-per-file     maximum concurrent copy stream threads per");
+			Console.WriteLine($"                                 file (default: {defaultValues.MaxThreadsPerFile})");
+			Console.WriteLine($"  -v, --verbose                  increase verbose output");
+			Console.WriteLine($"                                 (Example: -vvv for verbosity level 3)");
 		}
 
 		private static string GetNextArg(string[] args, ref int currentArgIndex)

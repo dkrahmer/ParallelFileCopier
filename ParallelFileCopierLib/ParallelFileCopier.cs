@@ -1,9 +1,11 @@
-﻿using System;
+﻿using Mono.Unix;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -26,6 +28,27 @@ namespace KrahmerSoft.ParallelFileCopierLib
 		public event EventHandler<FileCopyData> StartFileCopy;
 		public event EventHandler<FileCopyData> EndFileCopy;
 		public event EventHandler<VerboseInfo> VerboseOutput;
+
+		private readonly object _isPosixPlatformLock = new object();
+		private bool? _isPosixPlatform;
+		protected bool IsPosixPlatform
+		{
+			get
+			{
+				if (_isPosixPlatform == null)
+				{
+					lock (_isPosixPlatformLock)
+					{
+						if (_isPosixPlatform == null) // double-check inside the lock
+						{
+							_isPosixPlatform = RuntimeInformation.IsOSPlatform(OSPlatform.Linux) || RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
+						}
+					}
+				}
+
+				return _isPosixPlatform.Value;
+			}
+		}
 
 		public ParallelFileCopier(ParallelFileCopierOptions options = null)
 		{
@@ -252,17 +275,18 @@ namespace KrahmerSoft.ParallelFileCopierLib
 				if (_exceptions.Any())
 					return;
 
-				string incompleteDestinationFilePath = _options.UseIncompleteFilename ? $"{destinationFilePath}--incomplete--{Guid.NewGuid().ToString()}" : destinationFilePath;
+				string incompleteDestinationFilePath = _options.UseIncompleteFilename ? $"{destinationFilePath.TrimEnd('.')}.{Guid.NewGuid()}.incomplete" : destinationFilePath;
 
 				// Copy values to local vars
 				int bufferSize = _options.BufferSize;
 				int copyThreadCount = _options.MaxThreadsPerFile;
+				int minChunksPerThread = _options.MinChunksPerThread;
 
 				int minChunkSize = bufferSize;
 				var sourceFileInfo = new FileInfo(sourceFilePath);
 
 				// make sure each thread will transfer at least 8 chunks to make it worth our while to create a thread
-				int minBytesPerChunk = minChunkSize * 8;
+				int minBytesPerChunk = minChunkSize * minChunksPerThread;
 				long absoluteMaxThreadCount = (int)(sourceFileInfo.Length < minBytesPerChunk ? 1 : sourceFileInfo.Length / minBytesPerChunk);
 
 				if (copyThreadCount > absoluteMaxThreadCount)
@@ -302,11 +326,7 @@ namespace KrahmerSoft.ParallelFileCopierLib
 				var tasks = new List<Task>();
 
 				long currentFileChunkNumber = -1;
-
-				Func<long> getNextFileChunkNumber = () =>
-				{
-					return Interlocked.Increment(ref currentFileChunkNumber);
-				};
+				long getNextFileChunkNumber() => Interlocked.Increment(ref currentFileChunkNumber);
 
 				var resizeFileLock = new SemaphoreSlim(1);
 
@@ -343,6 +363,7 @@ namespace KrahmerSoft.ParallelFileCopierLib
 
 				try
 				{
+					destinationFileInfo.LastAccessTime = sourceFileInfo.LastAccessTime;
 					destinationFileInfo.LastWriteTime = sourceFileInfo.LastWriteTime;
 					destinationFileInfo.CreationTimeUtc = sourceFileInfo.CreationTimeUtc;
 				}
@@ -351,13 +372,42 @@ namespace KrahmerSoft.ParallelFileCopierLib
 					throw new ApplicationException("Failed to set destination write and create times.", ex);
 				}
 
-				try
+				if (!IsPosixPlatform)
 				{
-					destinationFileInfo.Attributes = sourceFileInfo.Attributes;
+					try
+					{
+						destinationFileInfo.Attributes = sourceFileInfo.Attributes;
+					}
+					catch (Exception ex)
+					{
+						throw new ApplicationException("Failed to set destination attributes.", ex);
+					}
 				}
-				catch (Exception ex)
+
+				destinationFileInfo.Refresh(); // Force write all changes now
+				destinationFileInfo = null;
+
+				if (IsPosixPlatform)
 				{
-					throw new ApplicationException("Failed to set destination attributes.", ex);
+					// Additional handling for posix platforms
+					try
+					{
+						var sourceUnixFileInfo = new UnixFileInfo(sourceFilePath);
+						var destinationUnixFileInfo = new UnixFileInfo(destinationFilePath)
+						{
+							FileAccessPermissions = sourceUnixFileInfo.FileAccessPermissions,
+							Protection = sourceUnixFileInfo.Protection,
+							FileSpecialAttributes = sourceUnixFileInfo.FileSpecialAttributes
+						};
+
+						destinationUnixFileInfo.SetOwner(sourceUnixFileInfo.OwnerUserId, sourceUnixFileInfo.OwnerGroupId);
+
+						destinationUnixFileInfo.Refresh(); // Force write all changes now
+					}
+					catch (Exception ex)
+					{
+						throw new ApplicationException("Failed to set destination attributes (Posix).", ex);
+					}
 				}
 
 				Interlocked.Increment(ref _copiedFileCount);
@@ -426,14 +476,14 @@ namespace KrahmerSoft.ParallelFileCopierLib
 					if (bytesToRead <= 0)
 						break;
 
-					VerboseOutput?.Invoke(this, new VerboseInfo(3, () => $"Reading {bytesToRead:#,##0} bytes from \"{sourceFilePath}\" ({startPosition:#,##0}-{startPosition + bytesToRead:#,##0})..."));
+					VerboseOutput?.Invoke(this, new VerboseInfo(3, () => $"Reading {bytesToRead:N0} bytes from \"{sourceFilePath}\" ({startPosition:N0}-{startPosition + bytesToRead:N0})..."));
 					int bytesRead = await reader.ReadAsync(buffer, 0, bytesToRead);
 					if (bytesRead <= 0)
 						break;
 
 					totalBytesRead += bytesRead;
 
-					VerboseOutput?.Invoke(this, new VerboseInfo(3, () => $"Writing {bytesToRead:#,##0} bytes to \"{destinationFilePath}\" ({startPosition:#,##0}-{startPosition + bytesRead:#,##0})..."));
+					VerboseOutput?.Invoke(this, new VerboseInfo(3, () => $"Writing {bytesToRead:N0} bytes to \"{destinationFilePath}\" ({startPosition:N0}-{startPosition + bytesRead:N0})..."));
 					await writer.WriteAsync(buffer, 0, bytesRead);
 
 					Interlocked.Add(ref _copiedByteCount, bytesRead);
@@ -482,7 +532,7 @@ namespace KrahmerSoft.ParallelFileCopierLib
 				totalSeconds = 0.0001; // Prevent divide by zero
 
 			double bytesPerSecond = copiedByteCount / totalSeconds;
-			VerboseOutput?.Invoke(this, new VerboseInfo(verboseLevel, () => $"Copied {copiedFileCount:#,##0} files ({copiedByteCount:#,##0} bytes) in {copyStopwatchElapsed.ToString("g")} ({bytesPerSecond:#,##0} b/s)"));
+			VerboseOutput?.Invoke(this, new VerboseInfo(verboseLevel, () => $"Copied {copiedFileCount:N0} files ({copiedByteCount:N0} bytes) in {copyStopwatchElapsed.ToString("g")} ({bytesPerSecond:N0} b/s)"));
 		}
 
 		private enum PathType
