@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 
 namespace KrahmerSoft.ParallelFileCopierCli
 {
@@ -82,6 +83,11 @@ namespace KrahmerSoft.ParallelFileCopierCli
 							optionsCli.ShowVerboseLevel = -1;
 							break;
 
+						case "--version":
+							ShowVersion();
+							Environment.Exit(0);
+							break;
+
 						case "--help":
 						case "-h":
 						case "/h":
@@ -127,10 +133,18 @@ namespace KrahmerSoft.ParallelFileCopierCli
 			return argsNotUsedCount;
 		}
 
+		private static void ShowVersion()
+		{
+			Console.WriteLine(Assembly.GetExecutingAssembly().GetName().Version);
+		}
+
 		private static void ShowHelp()
 		{
 			var defaultValues = new ParallelFileCopierOptionsCli();
 
+			Console.Write($"ParallelFileCopier v");
+			ShowVersion();
+			Console.WriteLine();
 			Console.WriteLine($"Usage: ParallelFileCopier [OPTIONS]... [SOURCE-PATH] [DESTINATION-PATH]");
 			Console.WriteLine();
 			Console.WriteLine($"Required arguments:");
@@ -166,6 +180,7 @@ namespace KrahmerSoft.ParallelFileCopierCli
 			Console.WriteLine($"                                 file (default: {defaultValues.MaxThreadsPerFile})");
 			Console.WriteLine($"  -v, --verbose                  increase verbose output");
 			Console.WriteLine($"                                 (Example: -vvv for verbosity level 3)");
+			Console.WriteLine($"  --version                      output the version");
 		}
 
 		private static string GetNextArg(string[] args, ref int currentArgIndex)
