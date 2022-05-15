@@ -4,6 +4,7 @@
     <TargetFramework>netstandard2.0</TargetFramework>
     <AssemblyName>KrahmerSoft.ParallelFileCopierLib</AssemblyName>
     <RootNamespace>KrahmerSoft.ParallelFileCopierLib</RootNamespace>
+    <Version>1.1.0</Version>
   </PropertyGroup>
 
   <ItemGroup>

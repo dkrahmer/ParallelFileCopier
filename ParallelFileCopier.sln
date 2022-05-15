@@ -1,11 +1,11 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio 15
-VisualStudioVersion = 15.0.28307.329
-MinimumVisualStudioVersion = 10.0.40219.1
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.31727.386
+MinimumVisualStudioVersion = 16
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "ParallelFileCopier", "ParallelFileCopier\ParallelFileCopier.csproj", "{827AC6DF-2C87-45B5-A843-9E79F9286BF3}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ParallelFileCopierLib", "ParallelFileCopierLib\ParallelFileCopierLib.csproj", "{5D2F2F6A-AE5F-4F57-8BBD-A6D96B9571AC}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "ParallelFileCopierLib", "ParallelFileCopierLib\ParallelFileCopierLib.csproj", "{5D2F2F6A-AE5F-4F57-8BBD-A6D96B9571AC}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{880D42B5-1C61-490B-87D3-86304CF00380}"
 	ProjectSection(SolutionItems) = preProject
