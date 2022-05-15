@@ -40,5 +40,5 @@ jobs:
     - name: Create artifact ParallelFileCopierLib
       uses: actions/upload-artifact@v3
       with:
-        name: ParallelFileCopierCli
+        name: ParallelFileCopierLib
         path: ParallelFileCopierLib/bin/Release/netstandard2.0/*
