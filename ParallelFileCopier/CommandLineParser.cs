@@ -83,6 +83,11 @@ namespace KrahmerSoft.ParallelFileCopierCli
 							optionsCli.ShowVerboseLevel = -1;
 							break;
 
+						case "--skip-identical":
+						case "-s":
+							optionsCli.SkipExistingIdenticalFiles = true;
+							break;
+
 						case "--version":
 							ShowVersion();
 							Environment.Exit(0);
@@ -174,6 +179,8 @@ namespace KrahmerSoft.ParallelFileCopierCli
 			Console.WriteLine($"                                 directory is scanned in background");
 			Console.WriteLine($"                                 (default: {defaultValues.MaxFileQueueLength})");
 			Console.WriteLine($"  -q, --quiet                    quite, no output (except for errors)");
+			Console.WriteLine($"  -s, --skip-identical           skip existing files with same size and last");
+			Console.WriteLine($"                                 write date in destination (default: {defaultValues.SkipExistingIdenticalFiles})");
 			Console.WriteLine($"  -T, --max-total-threads        maximum total concurrent copy stream threads");
 			Console.WriteLine($"                                 overall (default: {defaultValues.MaxTotalThreads})");
 			Console.WriteLine($"  -t, --max-threads-per-file     maximum concurrent copy stream threads per");
