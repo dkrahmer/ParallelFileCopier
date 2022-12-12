@@ -41,7 +41,7 @@ namespace KrahmerSoft.ParallelFileCopierCli
 
 					return 0;
 				}
-				catch (OperationCanceledException ex)
+				catch (OperationCanceledException)
 				{
 					return 1;
 				}
@@ -69,17 +69,17 @@ namespace KrahmerSoft.ParallelFileCopierCli
 
 		private static void ListenForCancelation()
 		{
-			Console.CancelKeyPress += (_, ea) =>
+			Console.CancelKeyPress += (a, e) =>
 			{
 				_sigintReceived = true;
 				// Tell .NET to not terminate the process
-				ea.Cancel = true;
+				e.Cancel = true;
 
 				Console.WriteLine("Received SIGINT (Ctrl+C) - Gracefully canceling...");
 				_cancellationTokenSource.Cancel();
 			};
 
-			AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+			AppDomain.CurrentDomain.ProcessExit += (a, b) =>
 			{
 				if (!_sigintReceived)
 					return; // ignore - normal termination
