@@ -11,5 +11,6 @@
 		public bool CopyEmptyDirectories { get; set; } = false;
 		public string IncrementalSourcePath { get; set; }
 		public int MinChunksPerThread { get; set; } = 32;
+		public bool SkipExistingIdenticalFiles { get; set; }
 	}
 }

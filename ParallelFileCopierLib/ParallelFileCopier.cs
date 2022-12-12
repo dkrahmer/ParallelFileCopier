@@ -77,11 +77,26 @@ namespace KrahmerSoft.ParallelFileCopierLib
 
 		public async Task CopyFilesAsync(string sourcePath, string destinationPath)
 		{
-			await StartCopyOperationAsync();
+			CancellationTokenSource cancellationTokenSource = new CancellationTokenSource();
+			CancellationToken cancellationToken = cancellationTokenSource.Token;
+
+			await CopyFilesAsync(sourcePath, destinationPath, cancellationToken);
+		}
+
+		public async Task CopyFilesAsync(string sourcePath, string destinationPath, CancellationToken cancellationToken)
+		{
+			if (cancellationToken.IsCancellationRequested)
+				return;
+
+			await StartCopyOperationAsync(cancellationToken);
+			if (cancellationToken.IsCancellationRequested)
+				return;
 
 			try
 			{
-				await CopyFilesInternalAsync(sourcePath, destinationPath, 0);
+				await CopyFilesInternalAsync(sourcePath, destinationPath, 0, cancellationToken);
+				if (cancellationToken.IsCancellationRequested)
+					return;
 
 				if (_exceptions.Count == 1)
 					throw _exceptions.FirstOrDefault();
@@ -91,12 +106,15 @@ namespace KrahmerSoft.ParallelFileCopierLib
 			}
 			finally
 			{
-				EndCopyOperation();
+				EndCopyOperation(cancellationToken);
 			}
 		}
 
-		protected async Task CopyFilesInternalAsync(string sourcePath, string destinationPath, int level)
+		protected async Task CopyFilesInternalAsync(string sourcePath, string destinationPath, int level, CancellationToken cancellationToken)
 		{
+			if (cancellationToken.IsCancellationRequested)
+				return;
+
 			PathType sourceType = GetPathType(sourcePath);
 			PathType destinationType = GetPathType(destinationPath);
 			string sourceFileMask = "*";
@@ -175,15 +193,22 @@ namespace KrahmerSoft.ParallelFileCopierLib
 						destinationPath = Path.Combine(destinationPath, Path.GetFileName(sourcePath));
 					}
 
-					await EnqueueCopyFileTaskAsync(_copyFileTasks, sourcePath, destinationPath);
+					await EnqueueCopyFileTaskAsync(_copyFileTasks, sourcePath, destinationPath, cancellationToken);
+					if (cancellationToken.IsCancellationRequested)
+						return;
 				}
 				else
 				{
 					VerboseOutput?.Invoke(this, new VerboseInfo(1, () => $"Reading source files list from \"{sourcePath}\"..."));
 					foreach (string sourceFilePath in Directory.EnumerateFiles(sourcePath, sourceFileMask))
 					{
+						if (cancellationToken.IsCancellationRequested)
+							return;
+
 						string sourceFilename = Path.GetFileName(sourceFilePath);
-						await EnqueueCopyFileTaskAsync(_copyFileTasks, sourceFilePath, Path.Combine(destinationPath, sourceFilename));
+						await EnqueueCopyFileTaskAsync(_copyFileTasks, sourceFilePath, Path.Combine(destinationPath, sourceFilename), cancellationToken);
+						if (cancellationToken.IsCancellationRequested)
+							return;
 
 						if (_exceptions.Any())
 							return;
@@ -192,11 +217,52 @@ namespace KrahmerSoft.ParallelFileCopierLib
 					VerboseOutput?.Invoke(this, new VerboseInfo(1, () => $"Reading source subdirectories list from \"{sourcePath}\"..."));
 					foreach (string sourceSubDirectory in Directory.EnumerateDirectories(sourcePath))
 					{
+						if (cancellationToken.IsCancellationRequested)
+							return;
+
 						string subDirectoryName = Path.GetFileName(sourceSubDirectory);
-						await CopyFilesInternalAsync(Path.Combine(sourceSubDirectory, sourceFileMask), Path.Combine(destinationPath, subDirectoryName), level + 1);
+						string destinationSubDirectory = Path.Combine(destinationPath, subDirectoryName);
+						await CopyFilesInternalAsync(Path.Combine(sourceSubDirectory, sourceFileMask), destinationSubDirectory, level + 1, cancellationToken);
+
+						if (cancellationToken.IsCancellationRequested)
+							return;
 
 						if (_exceptions.Any())
 							return;
+					}
+				}
+
+				if (Directory.Exists(destinationPath))
+				{
+					var sourceDirectoryInfo = new DirectoryInfo(sourcePath);
+					var destinationDirectoryInfo = new DirectoryInfo(destinationPath);
+					if (destinationDirectoryInfo.Parent != null)
+					{ // update directory attributes if not the root
+						try
+						{
+							destinationDirectoryInfo.LastAccessTime = sourceDirectoryInfo.LastAccessTime;
+							destinationDirectoryInfo.LastWriteTime = sourceDirectoryInfo.LastWriteTime;
+							destinationDirectoryInfo.CreationTimeUtc = sourceDirectoryInfo.CreationTimeUtc;
+						}
+						catch (Exception ex)
+						{
+							throw new ApplicationException("Failed to set destination directory write and create times.", ex);
+						}
+
+						if (!IsPosixPlatform)
+						{
+							try
+							{
+								destinationDirectoryInfo.Attributes = sourceDirectoryInfo.Attributes;
+							}
+							catch (Exception ex)
+							{
+								throw new ApplicationException("Failed to set destination attributes.", ex);
+							}
+						}
+
+						destinationDirectoryInfo.Refresh(); // Force write all changes now
+						destinationDirectoryInfo = null;
 					}
 				}
 			}
@@ -215,12 +281,21 @@ namespace KrahmerSoft.ParallelFileCopierLib
 			}
 		}
 
-		private async Task EnqueueCopyFileTaskAsync(ConcurrentHashSet<Task> copyTasks, string sourcePath, string destinationPath)
+		private async Task EnqueueCopyFileTaskAsync(ConcurrentHashSet<Task> copyTasks, string sourcePath, string destinationPath, CancellationToken cancellationToken)
 		{
-			await _maxFileQueueLengthSemaphore.WaitAsync();
+			if (cancellationToken.IsCancellationRequested)
+				return;
+
+			await _maxFileQueueLengthSemaphore.WaitAsync(cancellationToken);
+			if (cancellationToken.IsCancellationRequested)
+				return;
+
 			VerboseOutput?.Invoke(this, new VerboseInfo(2, () => $"Adding copy task to queue: \"{sourcePath}\" -> \"{destinationPath}\"..."));
 
-			var copyFileTask = CopyFileInternalAsync(sourcePath, destinationPath);
+			var copyFileTask = CopyFileInternalAsync(sourcePath, destinationPath, cancellationToken);
+			if (cancellationToken.IsCancellationRequested)
+				return;
+
 			copyTasks.Add(copyFileTask);
 
 			var cleanupTask = copyFileTask.ContinueWith((antecedent) =>
@@ -249,24 +324,39 @@ namespace KrahmerSoft.ParallelFileCopierLib
 			});
 		}
 
-		public async Task CopyFileAsync(string sourceFilePath, string destinationFilePath)
+		public async Task CopyFileAsync(string sourceFilePath, string destinationFilePath, CancellationToken cancellationToken)
 		{
-			await StartCopyOperationAsync();
+			if (cancellationToken.IsCancellationRequested)
+				return;
+
+			await StartCopyOperationAsync(cancellationToken);
+			if (cancellationToken.IsCancellationRequested)
+				return;
 
 			try
 			{
-				await CopyFileInternalAsync(sourceFilePath, destinationFilePath);
+				await CopyFileInternalAsync(sourceFilePath, destinationFilePath, cancellationToken);
+				if (cancellationToken.IsCancellationRequested)
+					return;
 			}
 			finally
 			{
-				EndCopyOperation();
+				EndCopyOperation(cancellationToken);
 			}
 		}
 
-		public async Task CopyFileInternalAsync(string sourceFilePath, string destinationFilePath)
+		public async Task CopyFileInternalAsync(string sourceFilePath, string destinationFilePath, CancellationToken cancellationToken)
 		{
-			await _concurrentFilesSemaphore.WaitAsync();
-			await _maxTotalThreadsSafetySemaphore.WaitAsync();
+			if (cancellationToken.IsCancellationRequested)
+				return;
+
+			await _concurrentFilesSemaphore.WaitAsync(cancellationToken);
+			if (cancellationToken.IsCancellationRequested)
+				return;
+			await _maxTotalThreadsSafetySemaphore.WaitAsync(cancellationToken);
+			if (cancellationToken.IsCancellationRequested)
+				return;
+
 			bool maxTotalThreadsSafetySemaphoreReleased = false;
 			int lockedTotalThreadCount = 0;
 
@@ -285,6 +375,20 @@ namespace KrahmerSoft.ParallelFileCopierLib
 				int minChunkSize = bufferSize;
 				var sourceFileInfo = new FileInfo(sourceFilePath);
 
+				if (_options.SkipExistingIdenticalFiles)
+				{
+					if (File.Exists(destinationFilePath))
+					{
+						var tempDestinationFileInfo = new FileInfo(destinationFilePath);
+						if (sourceFileInfo.Length == tempDestinationFileInfo.Length
+							&& sourceFileInfo.LastWriteTimeUtc == tempDestinationFileInfo.LastWriteTimeUtc)
+						{
+							VerboseOutput?.Invoke(this, new VerboseInfo(1, () => $"Skipping existing same-size file in destination: \"{destinationFilePath}\""));
+							return;
+						}
+					}
+				}
+
 				// make sure each thread will transfer at least 8 chunks to make it worth our while to create a thread
 				int minBytesPerChunk = minChunkSize * minChunksPerThread;
 				long absoluteMaxThreadCount = (int)(sourceFileInfo.Length < minBytesPerChunk ? 1 : sourceFileInfo.Length / minBytesPerChunk);
@@ -294,7 +398,10 @@ namespace KrahmerSoft.ParallelFileCopierLib
 
 				for (int i = 0; i < copyThreadCount; i++) // Wait until we have enough threads available for this file
 				{
-					await _maxTotalThreadsSemaphore.WaitAsync();
+					await _maxTotalThreadsSemaphore.WaitAsync(cancellationToken);
+					if (cancellationToken.IsCancellationRequested)
+						return;
+
 					lockedTotalThreadCount++;
 				}
 
@@ -311,11 +418,14 @@ namespace KrahmerSoft.ParallelFileCopierLib
 					Directory.CreateDirectory(destinationDirectory);
 				}
 
+				if (File.Exists(destinationFilePath))
+				{
+					VerboseOutput?.Invoke(this, new VerboseInfo(0, () => $"Destination file exists{(_options.SkipExistingIdenticalFiles ? " with different size/date" : "")}. Deleting \"{destinationFilePath}\" before copy..."));
+					File.Delete(destinationFilePath);
+				}
+
 				StartFileCopy?.Invoke(this, new FileCopyData() { SourceFilePath = sourceFilePath, DestinationFilePath = destinationFilePath });
 				VerboseOutput?.Invoke(this, new VerboseInfo(0, () => $"Copying \"{sourceFilePath}\" -> \"{destinationFilePath}\"..."));
-
-				if (File.Exists(destinationFilePath))
-					File.Delete(destinationFilePath);
 
 				using (var writer = new FileStream(incompleteDestinationFilePath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize, FileOptions.Asynchronous | FileOptions.RandomAccess))
 				{
@@ -342,12 +452,29 @@ namespace KrahmerSoft.ParallelFileCopierLib
 						VerboseOutput?.Invoke(this, new VerboseInfo(2, () => $"Using IncrementalSymLinkSourcePath \"{sourceFilePathOverride}\""));
 					}
 
-					var task = CopyChunksAsync(sourceFilePathOverride, incompleteDestinationFilePath, bufferSize, getNextFileChunkNumber, resizeFileLock);
+					var task = CopyChunksAsync(sourceFilePathOverride, incompleteDestinationFilePath, bufferSize, getNextFileChunkNumber, resizeFileLock, cancellationToken);
 
 					tasks.Add(task);
 				}
 
 				await Task.WhenAll(tasks);
+				if (cancellationToken.IsCancellationRequested)
+				{
+					if (File.Exists(incompleteDestinationFilePath))
+					{
+						// Delete the file since it may not be complete
+						VerboseOutput?.Invoke(this, new VerboseInfo(0, () => $"Canceling: Deleting incomplete file \"{incompleteDestinationFilePath}\"..."));
+						try
+						{
+							File.Delete(incompleteDestinationFilePath);
+						}
+						catch (Exception ex)
+						{
+							VerboseOutput?.Invoke(this, new VerboseInfo(0, () => $"Canceling: Could not delete incomplete file \"{incompleteDestinationFilePath}\"! - {ex.ToString()}"));
+						}
+					}
+					return;
+				}
 
 				if (incompleteDestinationFilePath != destinationFilePath)
 				{
@@ -369,7 +496,7 @@ namespace KrahmerSoft.ParallelFileCopierLib
 				}
 				catch (Exception ex)
 				{
-					throw new ApplicationException("Failed to set destination write and create times.", ex);
+					throw new ApplicationException("Failed to set destination file write and create times.", ex);
 				}
 
 				if (!IsPosixPlatform)
@@ -435,7 +562,7 @@ namespace KrahmerSoft.ParallelFileCopierLib
 			}
 		}
 
-		private async Task CopyChunksAsync(string sourceFilePath, string destinationFilePath, int bufferSize, Func<long> getNextFileChunkNumber, SemaphoreSlim resizeFileLock)
+		private async Task CopyChunksAsync(string sourceFilePath, string destinationFilePath, int bufferSize, Func<long> getNextFileChunkNumber, SemaphoreSlim resizeFileLock, CancellationToken cancellationToken)
 		{
 			var buffer = new byte[bufferSize];
 			long totalBytesRead = 0;
@@ -458,7 +585,10 @@ namespace KrahmerSoft.ParallelFileCopierLib
 					if (bytesToCopy <= 0)
 						break;
 
-					await resizeFileLock.WaitAsync();
+					await resizeFileLock.WaitAsync(cancellationToken);
+					if (cancellationToken.IsCancellationRequested)
+						return;
+
 					try
 					{
 						if (writer.Length < minFileSize)
@@ -477,30 +607,40 @@ namespace KrahmerSoft.ParallelFileCopierLib
 						break;
 
 					VerboseOutput?.Invoke(this, new VerboseInfo(3, () => $"Reading {bytesToRead:N0} bytes from \"{sourceFilePath}\" ({startPosition:N0}-{startPosition + bytesToRead:N0})..."));
-					int bytesRead = await reader.ReadAsync(buffer, 0, bytesToRead);
+					int bytesRead = await reader.ReadAsync(buffer, 0, bytesToRead, cancellationToken);
+					if (cancellationToken.IsCancellationRequested)
+						return;
 					if (bytesRead <= 0)
 						break;
 
 					totalBytesRead += bytesRead;
 
 					VerboseOutput?.Invoke(this, new VerboseInfo(3, () => $"Writing {bytesToRead:N0} bytes to \"{destinationFilePath}\" ({startPosition:N0}-{startPosition + bytesRead:N0})..."));
-					await writer.WriteAsync(buffer, 0, bytesRead);
+					await writer.WriteAsync(buffer, 0, bytesRead, cancellationToken);
 
 					Interlocked.Add(ref _copiedByteCount, bytesRead);
+					if (cancellationToken.IsCancellationRequested)
+						return;
 				} while (true);
 			}
 		}
 
-		private async Task StartCopyOperationAsync()
+		private async Task StartCopyOperationAsync(CancellationToken cancellationToken)
 		{
-			await _copyOperationsSemaphore.WaitAsync(); // only 1 user operation at a time
+			if (cancellationToken.IsCancellationRequested)
+				return;
+
+			await _copyOperationsSemaphore.WaitAsync(cancellationToken); // only 1 user operation at a time
+			if (cancellationToken.IsCancellationRequested)
+				return;
+
 			_copyFileTasks = new ConcurrentHashSet<Task>();
 			_exceptions = new ConcurrentBag<Exception>();
 			_copyStopwatch = new Stopwatch();
 			_copyStopwatch.Start();
 		}
 
-		private void EndCopyOperation()
+		private void EndCopyOperation(CancellationToken cancellationToken)
 		{
 			try
 			{
@@ -513,7 +653,15 @@ namespace KrahmerSoft.ParallelFileCopierLib
 					throw new AggregateException(_exceptions);
 
 				ShowStatistics(0);
-				VerboseOutput?.Invoke(this, new VerboseInfo(0, () => $"Copy complete."));
+
+				if (cancellationToken.IsCancellationRequested)
+				{
+					VerboseOutput?.Invoke(this, new VerboseInfo(0, () => $"Copy INCOMPLETE due to cancellation."));
+				}
+				else
+				{
+					VerboseOutput?.Invoke(this, new VerboseInfo(0, () => $"Copy complete."));
+				}
 			}
 			finally
 			{
