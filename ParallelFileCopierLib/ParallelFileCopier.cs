@@ -221,12 +221,48 @@ namespace KrahmerSoft.ParallelFileCopierLib
 							return;
 
 						string subDirectoryName = Path.GetFileName(sourceSubDirectory);
-						await CopyFilesInternalAsync(Path.Combine(sourceSubDirectory, sourceFileMask), Path.Combine(destinationPath, subDirectoryName), level + 1, cancellationToken);
+						string destinationSubDirectory = Path.Combine(destinationPath, subDirectoryName);
+						await CopyFilesInternalAsync(Path.Combine(sourceSubDirectory, sourceFileMask), destinationSubDirectory, level + 1, cancellationToken);
+
 						if (cancellationToken.IsCancellationRequested)
 							return;
 
 						if (_exceptions.Any())
 							return;
+					}
+				}
+
+				if (Directory.Exists(destinationPath))
+				{
+					var sourceDirectoryInfo = new DirectoryInfo(sourcePath);
+					var destinationDirectoryInfo = new DirectoryInfo(destinationPath);
+					if (destinationDirectoryInfo.Parent != null)
+					{ // update directory attributes if not the root
+						try
+						{
+							destinationDirectoryInfo.LastAccessTime = sourceDirectoryInfo.LastAccessTime;
+							destinationDirectoryInfo.LastWriteTime = sourceDirectoryInfo.LastWriteTime;
+							destinationDirectoryInfo.CreationTimeUtc = sourceDirectoryInfo.CreationTimeUtc;
+						}
+						catch (Exception ex)
+						{
+							throw new ApplicationException("Failed to set destination directory write and create times.", ex);
+						}
+
+						if (!IsPosixPlatform)
+						{
+							try
+							{
+								destinationDirectoryInfo.Attributes = sourceDirectoryInfo.Attributes;
+							}
+							catch (Exception ex)
+							{
+								throw new ApplicationException("Failed to set destination attributes.", ex);
+							}
+						}
+
+						destinationDirectoryInfo.Refresh(); // Force write all changes now
+						destinationDirectoryInfo = null;
 					}
 				}
 			}
@@ -460,7 +496,7 @@ namespace KrahmerSoft.ParallelFileCopierLib
 				}
 				catch (Exception ex)
 				{
-					throw new ApplicationException("Failed to set destination write and create times.", ex);
+					throw new ApplicationException("Failed to set destination file write and create times.", ex);
 				}
 
 				if (!IsPosixPlatform)
