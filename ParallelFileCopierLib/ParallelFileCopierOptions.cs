@@ -12,5 +12,8 @@
 		public string IncrementalSourcePath { get; set; }
 		public int MinChunksPerThread { get; set; } = 32;
 		public bool SkipExistingIdenticalFiles { get; set; }
+		public int MaxAttempts { get; set; } = 20;
+		public int RetryWaitSeconds { get; set; } = 10;
+
 	}
 }

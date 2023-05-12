@@ -514,27 +514,36 @@ namespace KrahmerSoft.ParallelFileCopierLib
 				destinationFileInfo.Refresh(); // Force write all changes now
 				destinationFileInfo = null;
 
-				if (IsPosixPlatform)
+				try
 				{
-					// Additional handling for posix platforms
-					try
+					if (IsPosixPlatform)
 					{
-						var sourceUnixFileInfo = new UnixFileInfo(sourceFilePath);
-						var destinationUnixFileInfo = new UnixFileInfo(destinationFilePath)
+						// Additional handling for posix platforms
+						try
 						{
-							FileAccessPermissions = sourceUnixFileInfo.FileAccessPermissions,
-							Protection = sourceUnixFileInfo.Protection,
-							FileSpecialAttributes = sourceUnixFileInfo.FileSpecialAttributes
-						};
+							var sourceUnixFileInfo = new UnixFileInfo(sourceFilePath);
+							var destinationUnixFileInfo = new UnixFileInfo(destinationFilePath)
+							{
+								FileAccessPermissions = sourceUnixFileInfo.FileAccessPermissions,
+								Protection = sourceUnixFileInfo.Protection,
+								FileSpecialAttributes = sourceUnixFileInfo.FileSpecialAttributes
+							};
 
-						destinationUnixFileInfo.SetOwner(sourceUnixFileInfo.OwnerUserId, sourceUnixFileInfo.OwnerGroupId);
+							destinationUnixFileInfo.Refresh(); // Force write all changes now
 
-						destinationUnixFileInfo.Refresh(); // Force write all changes now
+							destinationUnixFileInfo.SetOwner(sourceUnixFileInfo.OwnerUserId, sourceUnixFileInfo.OwnerGroupId);
+
+							destinationUnixFileInfo.Refresh(); // Force write all changes now
+						}
+						catch (Exception ex)
+						{
+							throw new ApplicationException("Failed to set destination attributes (Posix).", ex);
+						}
 					}
-					catch (Exception ex)
-					{
-						throw new ApplicationException("Failed to set destination attributes (Posix).", ex);
-					}
+				}
+				catch (Exception ex)
+				{
+					VerboseOutput?.Invoke(this, new VerboseInfo(0, () => $"Warning: {ex.Message} - {ex.InnerException.Message}"));
 				}
 
 				Interlocked.Increment(ref _copiedFileCount);
@@ -567,61 +576,76 @@ namespace KrahmerSoft.ParallelFileCopierLib
 			var buffer = new byte[bufferSize];
 			long totalBytesRead = 0;
 
-			using (var writer = new FileStream(destinationFilePath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite, bufferSize, FileOptions.Asynchronous | FileOptions.RandomAccess))
-			using (var reader = new FileStream(sourceFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, bufferSize, FileOptions.Asynchronous | FileOptions.RandomAccess))
+			for (int totalAttempts = 1; totalAttempts <= _options.MaxAttempts; totalAttempts++)
 			{
-				do
+				try
 				{
-					long fileChunkNumber = getNextFileChunkNumber();
-					long startPosition = fileChunkNumber * bufferSize;
-					long bytesToCopy = bufferSize;
-					long minFileSize = startPosition + bytesToCopy;
-					if (minFileSize > reader.Length)
+					using (var writer = new FileStream(destinationFilePath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite, bufferSize, FileOptions.Asynchronous | FileOptions.RandomAccess))
+					using (var reader = new FileStream(sourceFilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, bufferSize, FileOptions.Asynchronous | FileOptions.RandomAccess))
 					{
-						minFileSize = reader.Length;
-						bytesToCopy = reader.Length - startPosition;
+						do
+						{
+							long fileChunkNumber = getNextFileChunkNumber();
+							long startPosition = fileChunkNumber * bufferSize;
+							long bytesToCopy = bufferSize;
+							long minFileSize = startPosition + bytesToCopy;
+							if (minFileSize > reader.Length)
+							{
+								minFileSize = reader.Length;
+								bytesToCopy = reader.Length - startPosition;
+							}
+
+							if (bytesToCopy <= 0)
+								break;
+
+							await resizeFileLock.WaitAsync(cancellationToken);
+							if (cancellationToken.IsCancellationRequested)
+								return;
+
+							try
+							{
+								if (writer.Length < minFileSize)
+									writer.SetLength(minFileSize);
+							}
+							finally
+							{
+								resizeFileLock.Release();
+							}
+							writer.Seek(startPosition, SeekOrigin.Begin);
+							reader.Seek(startPosition, SeekOrigin.Begin);
+
+							int bytesToRead = bufferSize;
+
+							if (bytesToRead <= 0)
+								break;
+
+							VerboseOutput?.Invoke(this, new VerboseInfo(3, () => $"Reading {bytesToRead:N0} bytes from \"{sourceFilePath}\" ({startPosition:N0}-{startPosition + bytesToRead:N0})..."));
+							int bytesRead = await reader.ReadAsync(buffer, 0, bytesToRead, cancellationToken);
+							if (cancellationToken.IsCancellationRequested)
+								return;
+							if (bytesRead <= 0)
+								break;
+
+							totalBytesRead += bytesRead;
+
+							VerboseOutput?.Invoke(this, new VerboseInfo(3, () => $"Writing {bytesToRead:N0} bytes to \"{destinationFilePath}\" ({startPosition:N0}-{startPosition + bytesRead:N0})..."));
+							await writer.WriteAsync(buffer, 0, bytesRead, cancellationToken);
+
+							Interlocked.Add(ref _copiedByteCount, bytesRead);
+							if (cancellationToken.IsCancellationRequested)
+								return;
+						} while (true);
 					}
+					return;
+				}
+				catch (Exception ex)
+				{
+					if (cancellationToken.IsCancellationRequested || totalAttempts >= _options.MaxAttempts)
+						throw;
 
-					if (bytesToCopy <= 0)
-						break;
-
-					await resizeFileLock.WaitAsync(cancellationToken);
-					if (cancellationToken.IsCancellationRequested)
-						return;
-
-					try
-					{
-						if (writer.Length < minFileSize)
-							writer.SetLength(minFileSize);
-					}
-					finally
-					{
-						resizeFileLock.Release();
-					}
-					writer.Seek(startPosition, SeekOrigin.Begin);
-					reader.Seek(startPosition, SeekOrigin.Begin);
-
-					int bytesToRead = bufferSize;
-
-					if (bytesToRead <= 0)
-						break;
-
-					VerboseOutput?.Invoke(this, new VerboseInfo(3, () => $"Reading {bytesToRead:N0} bytes from \"{sourceFilePath}\" ({startPosition:N0}-{startPosition + bytesToRead:N0})..."));
-					int bytesRead = await reader.ReadAsync(buffer, 0, bytesToRead, cancellationToken);
-					if (cancellationToken.IsCancellationRequested)
-						return;
-					if (bytesRead <= 0)
-						break;
-
-					totalBytesRead += bytesRead;
-
-					VerboseOutput?.Invoke(this, new VerboseInfo(3, () => $"Writing {bytesToRead:N0} bytes to \"{destinationFilePath}\" ({startPosition:N0}-{startPosition + bytesRead:N0})..."));
-					await writer.WriteAsync(buffer, 0, bytesRead, cancellationToken);
-
-					Interlocked.Add(ref _copiedByteCount, bytesRead);
-					if (cancellationToken.IsCancellationRequested)
-						return;
-				} while (true);
+					VerboseOutput?.Invoke(this, new VerboseInfo(0, () => $"Warning, retrying after exception: {ex.Message}"));
+					Thread.Sleep(_options.RetryWaitSeconds * 1000);
+				}
 			}
 		}
 
