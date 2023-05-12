@@ -53,6 +53,11 @@ namespace KrahmerSoft.ParallelFileCopierCli
 							optionsCli.MaxFileQueueLength = GetNextArgAsInt(args, ref argIndex);
 							break;
 
+						case "--max-attempts":
+						case "-m":
+							optionsCli.MaxAttempts = GetNextArgAsInt(args, ref argIndex);
+							break;
+
 						case "--min-chunks-per-thread":
 						case "-c":
 							optionsCli.MinChunksPerThread = GetNextArgAsInt(args, ref argIndex);
@@ -81,6 +86,11 @@ namespace KrahmerSoft.ParallelFileCopierCli
 						case "--quiet":
 						case "-q":
 							optionsCli.ShowVerboseLevel = -1;
+							break;
+
+						case "--retry-seconds":
+						case "-r":
+							optionsCli.RetryWaitSeconds = GetNextArgAsInt(args, ref argIndex);
 							break;
 
 						case "--skip-identical":
@@ -178,7 +188,9 @@ namespace KrahmerSoft.ParallelFileCopierCli
 			Console.WriteLine($"  -l, --max-file-queue-length    maximum copy task queue length - source");
 			Console.WriteLine($"                                 directory is scanned in background");
 			Console.WriteLine($"                                 (default: {defaultValues.MaxFileQueueLength})");
+			Console.WriteLine($"  -m, --max-attempts             max attempts per chunk (default: {defaultValues.MaxAttempts})");
 			Console.WriteLine($"  -q, --quiet                    quite, no output (except for errors)");
+			Console.WriteLine($"  -r, --retry-seconds            seconds to wait after a failed attempt (default: {defaultValues.RetryWaitSeconds})");
 			Console.WriteLine($"  -s, --skip-identical           skip existing files with same size and last");
 			Console.WriteLine($"                                 write date in destination (default: {defaultValues.SkipExistingIdenticalFiles})");
 			Console.WriteLine($"  -T, --max-total-threads        maximum total concurrent copy stream threads");
